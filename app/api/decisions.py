@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from fastapi import BackgroundTasks
+from app.core.ai_explainer import explain_decision_async
+from app.core.decision_comparator import compare_decisions
+
 
 from app.db.database import get_db
 from app.db.models.decision import Decision
@@ -12,6 +16,7 @@ router = APIRouter(prefix="/decisions", tags=["Decisions"])
 @router.post("/", response_model=DecisionResponse)
 def create_decision(
     payload: DecisionCreate,
+    background_tasks:BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     latest_version = (
@@ -33,6 +38,13 @@ def create_decision(
     db.add(decision)
     db.commit()
     db.refresh(decision)
+
+    background_tasks.add_task(
+    explain_decision_async,
+    db,
+    decision
+)
+
 
     return DecisionResponse(
         id=str(decision.id),
@@ -65,3 +77,26 @@ def get_decision_history(
         }
         for d in decisions
     ]
+
+@router.post("/{decision_key}/compare")
+def compare_decision_versions(
+    decision_key: str,
+    version_a: int,
+    version_b: int,
+    db: Session = Depends(get_db),
+):
+    comparison = compare_decisions(
+        db=db,
+        decision_key=decision_key,
+        version_a=version_a,
+        version_b=version_b,
+    )
+
+    return {
+        "decision_key": comparison.decision_key,
+        "version_a": comparison.version_a,
+        "version_b": comparison.version_b,
+        "comparison_text": comparison.comparison_text,
+        "model_name": comparison.model_name,
+        "created_at": comparison.created_at,
+    }
